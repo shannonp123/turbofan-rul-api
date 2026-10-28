@@ -1,2 +1,2 @@
 # Turbofan RUL Prediction API
-FastAPI + numpy LSTM inference. Shannon Parmar, 230160223106.
+FastAPI + numpy LSTM inference. 
