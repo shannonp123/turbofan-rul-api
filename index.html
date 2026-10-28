@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turbofan Engine RUL Prediction</title>
+<style>
+:root{--bg:#f6f8fa;--card:#fff;--text:#14212b;--muted:#5b6b78;--line:#d9e0e6;--brand:#1f3a4d;--red:#c0392b;--amb:#d68910;--grn:#1e8449;--accent:#2e86c1}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0f161c;--card:#18222b;--text:#e8eef2;--muted:#9fb0bc;--line:#2b3a46;--brand:#7fb3d5;--red:#ec7063;--amb:#f5b041;--grn:#58d68d;--accent:#5dade2}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+.w{max-width:860px;margin:0 auto;padding:20px 16px 48px}
+h1{margin:12px 0 4px;font-size:1.7rem;color:var(--brand)}h2{margin:28px 0 10px;font-size:1.15rem;color:var(--brand)}
+.sub{color:var(--muted);margin:0}.chip{display:inline-block;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:4px 12px;font-size:.85rem;color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+input[type=number]{width:96px;padding:8px 10px;font-size:1.05rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+textarea{width:100%;height:130px;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);padding:8px}
+button{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:8px;padding:8px 14px;font-size:.95rem;cursor:pointer}
+button.p{background:var(--brand);color:var(--bg);border-color:var(--brand);font-weight:700}
+.res{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:10px 0}
+.l{font-size:.8rem;color:var(--muted)}.big{font-size:2rem;font-weight:800}
+.badge{display:inline-block;padding:4px 14px;border-radius:999px;font-weight:700;color:#fff;margin-top:8px}
+.Urgent{background:var(--red)}.Soon{background:var(--amb)}.Safe{background:var(--grn)}
+.scale{position:relative;height:18px;border-radius:9px;overflow:hidden;display:flex;margin:28px 0 6px}.scale i{display:block;height:100%;opacity:.85}
+.mw{position:relative;height:0}.mk{position:absolute;top:-52px;transform:translateX(-50%);font-size:.75rem;font-weight:700;white-space:nowrap}
+.ax{display:flex;justify-content:space-between;font-size:.75rem;color:var(--muted)}
+.err{color:var(--red);font-weight:600}.warn{color:var(--amb)}
+svg{width:100%;height:90px}.note{font-size:.85rem;color:var(--muted);margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+a{color:var(--accent)}
+</style></head><body><div class="w">
+<span class="chip">Shannon Parmar · Enrollment 230160223106</span>
+<h1>Turbofan Engine RUL Prediction</h1>
+<p class="sub">This page calls a live REST API (FastAPI). It sends the last 30 cycles of an engine's sensor readings to the LSTM model and shows the remaining useful life. Manuf-Project 2, CSE4007L.</p>
+<p class="l" style="margin-top:8px"><b>Endpoints:</b> GET /health · GET /example/{engine} · POST /predict · interactive docs at <a href="/docs">/docs</a></p>
+
+<h2>1. Predict for a test engine</h2>
+<div class="card">
+<div class="row"><label for="n">Engine (1 to 100)</label><input id="n" type="number" min="1" max="100" value="34">
+<button class="p" id="go">Predict</button>
+<button data-e="34">34</button><button data-e="46">46</button><button data-e="25">25</button></div>
+<div id="out" class="l">Choose an engine and press Predict. The page loads its last 30 cycles and sends them to the model.</div>
+</div>
+
+<h2>2. Or send your own readings (JSON)</h2>
+<div class="card">
+<div class="row"><button id="load">Load example into box</button><button class="p" id="send">Send to /predict</button></div>
+<textarea id="j" spellcheck="false" placeholder="Press Load example, change some sensor values if you like, then Send."></textarea>
+<div id="out2" class="l" style="margin-top:8px"></div>
+</div>
+
+<p class="note">API pages: <a href="/docs">/docs</a> (interactive documentation) and <a href="/health">/health</a>. Data is simulated NASA C-MAPSS FD001 (one operating condition, one fault mode); the model is for learning and has not been validated on real aircraft. Send 30 cycles for reliable results.</p>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+function pos(v){return Math.min(100,Math.max(0,v/125*100))+"%"}
+function spark(rd){
+  const v=rd.map(r=>r.s11);if(v.length<2)return"";
+  const mn=Math.min(...v),mx=Math.max(...v),d=(mx-mn)||1;
+  const pts=v.map((y,i)=>(i/(v.length-1)*300).toFixed(1)+","+(80-(y-mn)/d*70).toFixed(1)).join(" ");
+  return '<div class="l" style="margin-top:8px">Sensor s11 over the last '+v.length+' cycles (it rises as the engine wears out)</div><svg viewBox="0 0 300 90" preserveAspectRatio="none"><polyline fill="none" stroke="var(--accent)" stroke-width="2" points="'+pts+'"/></svg>';
+}
+function render(el,j,truth,ms,rd){
+  const e=truth==null?null:j.predicted_RUL-truth;
+  let h='<div class="res"><div><div class="l">Predicted RUL</div><div class="big">'+j.predicted_RUL.toFixed(1)+'</div></div>'
+   +'<div><div class="l">Actual RUL</div><div class="big">'+(truth==null?"–":truth.toFixed(0))+'</div></div>'
+   +'<div><div class="l">Error (cycles)</div><div class="big">'+(e==null?"–":(e>0?"+":"")+e.toFixed(1))+'</div></div>'
+   +'<div><div class="l">Maintenance zone</div><span class="badge '+j.zone+'">'+j.zone+'</span></div></div>'
+   +'<div>'+j.recommendation+'</div>'
+   +(j.warning?'<div class="warn">'+j.warning+'</div>':'')
+   +'<div class="scale"><i style="width:24%;background:var(--red)"></i><i style="width:24%;background:var(--amb)"></i><i style="width:52%;background:var(--grn)"></i></div>'
+   +'<div class="mw"><span class="mk" style="left:'+pos(j.predicted_RUL)+'">pred '+j.predicted_RUL.toFixed(0)+'</span>'
+   +(truth==null?'':'<span class="mk" style="left:'+pos(truth)+';top:-72px">actual '+truth.toFixed(0)+'</span>')+'</div>'
+   +'<div class="ax"><span>0</span><span>30</span><span>60</span><span>125 cycles</span></div>'
+   +spark(rd)+'<div class="l" style="margin-top:6px">'+j.cycles_received+' cycles sent · '+j.model+' · API response time '+ms+' ms</div>'
+   +'<details style="margin-top:8px"><summary class="l">Raw API response (JSON)</summary><pre style="overflow:auto;font-size:12px">'+JSON.stringify(j,null,1)+'</pre></details>';
+  el.innerHTML=h;
+}
+async function predict(el,payload,truth){
+  el.innerHTML='<span class="l">Calling the REST API… (if the free server was asleep, the first call can take up to a minute)</span>';
+  const t0=performance.now();
+  try{
+    const r=await fetch("/predict",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    const ms=Math.round(performance.now()-t0),j=await r.json();
+    if(!r.ok){el.innerHTML='<span class="err">Error '+r.status+': '+(typeof j.detail==="string"?j.detail:JSON.stringify(j.detail))+'</span>';return}
+    render(el,j,truth,ms,payload.readings);
+  }catch(e){el.innerHTML='<span class="err">Could not reach the API: '+e+'</span>'}
+}
+async function example(u){const r=await fetch("/example/"+u);if(!r.ok)throw new Error((await r.json()).detail);return r.json()}
+async function runEngine(){
+  const u=parseInt($("n").value,10);
+  try{const ex=await example(u);predict($("out"),{engine_id:ex.engine_id,readings:ex.readings},ex.true_RUL)}
+  catch(e){$("out").innerHTML='<span class="err">'+e.message+'</span>'}
+}
+$("go").onclick=runEngine;
+document.querySelectorAll("button[data-e]").forEach(b=>b.onclick=()=>{$("n").value=b.dataset.e;runEngine()});
+$("load").onclick=async()=>{
+  try{const ex=await example(parseInt($("n").value,10));$("j").value=JSON.stringify({engine_id:ex.engine_id,readings:ex.readings.slice(-30)},null,1)}
+  catch(e){$("out2").innerHTML='<span class="err">'+e.message+'</span>'}
+};
+$("send").onclick=()=>{
+  let p;try{p=JSON.parse($("j").value)}catch(e){$("out2").innerHTML='<span class="err">This is not valid JSON.</span>';return}
+  predict($("out2"),p,null);
+};
+runEngine();
+</script></body></html>
